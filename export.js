@@ -1,20 +1,23 @@
 #!/usr/bin/env node
 
+const fs = require('fs');
+const path = require('path');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const { createObjectCsvWriter } = require('csv-writer');
 
-/**
- * Sanitize a string into a safe filename:
- * - Replace illegal filesystem chars with '_'
- * - Trim to 50 chars
- * - Fallback to "Unknown"
- */
+// 1️⃣ Make sure exports/ exists
+const OUT_DIR = path.join(__dirname, 'exports');
+if (!fs.existsSync(OUT_DIR)) {
+  fs.mkdirSync(OUT_DIR, { recursive: true });
+}
+
+// 2️⃣ Simple filename sanitizer
 function sanitizeFilename(name) {
-  const cleaned = name
+  return name
     .replace(/[<>:"\/\\|?*\x00-\x1F]/g, '_')
-    .trim();
-  return cleaned.length > 0 ? cleaned.slice(0, 50) : 'Unknown';
+    .trim()
+    .slice(0, 50) || 'Unknown';
 }
 
 const client = new Client({
@@ -27,24 +30,24 @@ client.on('qr', qr => {
 });
 
 client.on('ready', async () => {
-  console.log('✅ Logged in — starting export…');
+  console.log('✅ Logged in — exporting chats…');
 
   try {
     const chats = await client.getChats();
-    console.log(`🗨️  Found ${chats.length} chats`);
+    console.log(`🗨️  Found ${chats.length} chats (individual & group)`);
 
     for (const chat of chats) {
+      // Name for file: group chats use chat.name, one‑to‑one use formattedTitle
       const title     = chat.name || chat.formattedTitle || chat.id.user;
       const safeTitle = sanitizeFilename(title);
-      console.log(`\n📂 Processing "${title}" → file "${safeTitle}.csv"`);
+      console.log(`\n📂 Processing "${title}" → exports/${safeTitle}.csv`);
 
-      // Prepare to fetch messages in pages
-      const records = [];
+      // 3️⃣ Fetch in pages of LIMIT
       const LIMIT = 1000;
       let lastId = null;
+      const records = [];
 
       while (true) {
-        // Build fetch options
         const opts = { limit: LIMIT };
         if (lastId) opts.before = lastId;
 
@@ -52,11 +55,10 @@ client.on('ready', async () => {
         const batch = await chat.fetchMessages(opts);
         console.log(`  ↳ Retrieved ${batch.length} messages`);
 
-        // No more messages?
         if (batch.length === 0) break;
 
-        // Process in chronological order
-        for (const msg of batch.reverse()) {
+        // reverse so we push oldest→newest
+        batch.reverse().forEach(msg => {
           const dt = new Date(msg.timestamp * 1000);
           records.push({
             chat:   title,
@@ -65,20 +67,20 @@ client.on('ready', async () => {
             author: msg.author?.split('@')[0] || (msg.fromMe ? 'Me' : title),
             body:   msg.body.replace(/\r?\n+/g, ' ')
           });
-        }
+        });
 
-        // If fewer than LIMIT, we've reached the end
+        // if less than a full page, we’re done
         if (batch.length < LIMIT) break;
 
-        // Prepare for next page: use the raw message ID string
-        lastId = batch[0].id.id;
+        // next page should end just before the oldest we just got
+        lastId = batch[0].id._serialized;
       }
 
       console.log(`  ✅ Fetched ${records.length} messages`);
 
-      // Write out CSV
+      // 4️⃣ Write CSV into exports/ folder
       const csvWriter = createObjectCsvWriter({
-        path: `${safeTitle}.csv`,
+        path: path.join(OUT_DIR, `${safeTitle}.csv`),
         header: [
           { id: 'chat',   title: 'Chat' },
           { id: 'date',   title: 'Date' },
@@ -88,11 +90,12 @@ client.on('ready', async () => {
         ]
       });
 
-      console.log(`  ✏️  Writing ${safeTitle}.csv (${records.length} rows)…`);
+      console.log(`  ✏️  Writing exports/${safeTitle}.csv (${records.length} rows)…`);
       await csvWriter.writeRecords(records);
-      console.log(`  🏁 Wrote ${safeTitle}.csv`);
+      console.log(`  🏁 Done: exports/${safeTitle}.csv`);
     }
 
+    console.log('\n🎉 All chats exported into the exports/ folder.');
   } catch (err) {
     console.error('❌ Export failed:', err);
   } finally {
