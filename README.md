@@ -87,3 +87,8 @@ A Node.js script that uses `whatsapp-web.js` to export all your WhatsApp chats a
 ## License
 
 This project is licensed under the **MIT License**.
+
+
+## Troubleshooting
+
+./wwebjs_auth/ -> delete this file if code is stuck 
